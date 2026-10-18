@@ -2,44 +2,44 @@
 
 const std = @import("std");
 
-pub const Pos = struct { x: f64, y: f64, z: f64 };
+pub const Position = struct { x: f64, y: f64, z: f64 };
 
-pub fn dist(a: Pos, b: Pos) f64 {
+pub fn distance(a: Position, b: Position) f64 {
     const dx = a.x - b.x;
     const dy = a.y - b.y;
     const dz = a.z - b.z;
     return @sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-pub fn bearing(from: Pos, x: f64, y: f64) f64 {
+pub fn bearing(from: Position, x: f64, y: f64) f64 {
     return std.math.atan2(x - from.x, y - from.y);
 }
 
-pub fn extra(illum: Pos, post: Pos, craft: Pos) f64 {
-    return dist(illum, craft) + dist(craft, post) - dist(illum, post);
+pub fn excessPath(transmitter: Position, station: Position, aircraft: Position) f64 {
+    return distance(transmitter, aircraft) + distance(aircraft, station) - distance(transmitter, station);
 }
 
-// First place a new ear plot. The ellipse meets the ray more than once,
-// so this is only a start. Later plots are checked in azimuth and delay.
-pub fn pin(post: Pos, illum: Pos, az: f64, delay_m: f64) struct { x: f64, y: f64 } {
-    const ux = @sin(az);
-    const uy = @cos(az);
-    const want = delay_m + dist(illum, post);
-    var best_d: f64 = 4000;
-    var best_err: f64 = 1e18;
-    var d: f64 = 800;
-    while (d <= 80000) : (d += 250) {
-        var z: f64 = 200;
-        var local: f64 = 1e18;
-        while (z <= 12000) : (z += 200) {
-            const p = Pos{ .x = post.x + ux * d, .y = post.y + uy * d, .z = z };
-            const err = @abs(dist(illum, p) + dist(p, post) - want);
-            if (err < local) local = err;
+// Search along the measured bearing for a starting position. Altitude is
+// unknown, so this coarse range estimate can be ambiguous.
+pub fn initialPosition(station: Position, transmitter: Position, azimuth_rad: f64, excess_path_m: f64) struct { x: f64, y: f64 } {
+    const direction_x = @sin(azimuth_rad);
+    const direction_y = @cos(azimuth_rad);
+    const path_length_m = excess_path_m + distance(transmitter, station);
+    var best_range_m: f64 = 4000;
+    var best_error: f64 = 1e18;
+    var range_m: f64 = 800;
+    while (range_m <= 80000) : (range_m += 250) {
+        var altitude_m: f64 = 200;
+        var altitude_error: f64 = 1e18;
+        while (altitude_m <= 12000) : (altitude_m += 200) {
+            const candidate = Position{ .x = station.x + direction_x * range_m, .y = station.y + direction_y * range_m, .z = altitude_m };
+            const error_m = @abs(distance(transmitter, candidate) + distance(candidate, station) - path_length_m);
+            if (error_m < altitude_error) altitude_error = error_m;
         }
-        if (local < best_err) {
-            best_err = local;
-            best_d = d;
+        if (altitude_error < best_error) {
+            best_error = altitude_error;
+            best_range_m = range_m;
         }
     }
-    return .{ .x = post.x + ux * best_d, .y = post.y + uy * best_d };
+    return .{ .x = station.x + direction_x * best_range_m, .y = station.y + direction_y * best_range_m };
 }

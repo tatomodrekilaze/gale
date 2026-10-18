@@ -1,20 +1,20 @@
 # Gale
 
-A Zig simulation of two passive listening posts in Georgia. It combines simulated aircraft broadcasts with bearing and path-delay measurements, keeps a track history, and checks what happens when terrain blocks a receiver.
+A small Zig project for studying passive receiver geometry and track continuity. Two simulated listening posts share measurements, and a tracker tries to keep the same aircraft ID when terrain gets in the way.
 
-The posts sit at Poti and Akhaltsikhe. Mtatsminda's television tower is the assumed illuminator. Measurements and aircraft paths are generated locally; the program does not receive radio signals or connect to a live aircraft feed.
+The sites are Poti and Akhaltsikhe, with Mtatsminda's television tower used as the assumed transmitter. Aircraft routes and measurements come from fixed scenarios. The terrain comes from SRTM elevation tiles.
 
 ## Preview
 
-The current output is a set of files. The program has no interactive dashboard yet.
+Running Gale produces images, an STL model, and a text journal. There is no interactive dashboard or live radio input yet.
 
 ![Simple model of the listening post](docs/post.png)
 
-The model contains a base, mast, receiver, two panels, and a camera. It is a rough assembly of boxes exported as STL, rather than a fabrication-ready design.
+The post is a rough model made from six boxes: base, mast, receiver, two panels, and a camera. Dimensions are in millimetres. It gives the components a place to sit; it is not a fabrication drawing.
 
 ![Terrain and the final positions from the shadow scenario](docs/map.png)
 
-The map uses the bundled elevation grid. Gold marks indicate the two posts, the pale mark is Zekari, and blue marks show the remaining tracks. This is a final snapshot, not a live display.
+Gold marks are the two posts, the pale mark is Zekari, and blue marks are the tracks left at the end of the shadow scenario. The blue strip on the west is a simple display mask, not a calculated coastline.
 
 ## Run
 
@@ -36,9 +36,11 @@ PPM is an image format. The PNGs above are saved previews of those outputs.
 
 ## What the tests cover
 
-Eight checks cover the elevation grid and six fixed scenarios: a broadcasting aircraft, crossing broadcasts, an aircraft without a callsign, a terrain shadow, a Kutaisi arrival, and clutter. The last check compares two runs of the same scenario byte for byte.
+Eight tests check terrain heights, a broadcasting aircraft, two crossing broadcasts, an aircraft without a callsign, a terrain shadow, a Kutaisi arrival, and clutter. The final test runs the same scenario twice and compares the journal text.
 
-These are regression checks for the simulated cases. They do not establish real-world detection accuracy. The final-approach region is a simplified geometric rule, and a callsign is treated as civil within these examples; neither is an operational identification method.
+The tracker keeps up to eight tracks and advances in two-second scans. Position is in metres, velocity is in metres per second, and bearings are in radians. The value called excess path length is in metres, not seconds.
+
+Some choices are deliberately narrow: aircraft altitude is supplied by the scenario, a single receiver track can use a fallback association, and the approach region is a rectangle near Kutaisi. Callsigns count as civil within the examples. These checks tell us whether the examples still work after a code change; they do not measure real-world detection or identification accuracy.
 
 ## Code
 

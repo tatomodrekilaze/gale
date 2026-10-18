@@ -4,3 +4,5 @@ data/hgt/
 out/
 _scan.py
 PUBLISH_REQUEST.md
+__pycache__/
+*.py[cod]

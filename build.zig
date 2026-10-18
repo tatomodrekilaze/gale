@@ -1,35 +1,35 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+pub fn build(builder: *std.Build) void {
+    const target = builder.standardTargetOptions(.{});
+    const optimize = builder.standardOptimizeOption(.{});
 
-    const mod = b.addModule("gale", .{
-        .root_source_file = b.path("src/root.zig"),
+    const gale_module = builder.addModule("gale", .{
+        .root_source_file = builder.path("src/root.zig"),
         .target = target,
     });
 
-    const exe = b.addExecutable(.{
+    const executable = builder.addExecutable(.{
         .name = "gale",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+        .root_module = builder.createModule(.{
+            .root_source_file = builder.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "gale", .module = mod },
+                .{ .name = "gale", .module = gale_module },
             },
         }),
     });
-    b.installArtifact(exe);
+    builder.installArtifact(executable);
 
-    const run_step = b.step("run", "Run the listening post");
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    run_cmd.step.dependOn(b.getInstallStep());
+    const run_step = builder.step("run", "Run all six scenarios and write the outputs");
+    const run_command = builder.addRunArtifact(executable);
+    run_step.dependOn(&run_command.step);
+    run_command.step.dependOn(builder.getInstallStep());
 
-    const tests = b.addTest(.{
-        .root_module = mod,
+    const tests = builder.addTest(.{
+        .root_module = gale_module,
     });
-    const test_step = b.step("test", "The passes the picture has to survive");
-    test_step.dependOn(&b.addRunArtifact(tests).step);
+    const test_step = builder.step("test", "Run the scenario regression tests");
+    test_step.dependOn(&builder.addRunArtifact(tests).step);
 }

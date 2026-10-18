@@ -3,152 +3,130 @@
 const std = @import("std");
 const gale = @import("gale");
 
+const Scenario = struct {
+    name: []const u8,
+    tracker: gale.tracking.Tracker,
+};
+
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    const arena = init.arena.allocator();
-    var g = gale.ground.load();
-
+    const allocator = init.arena.allocator();
+    const terrain = gale.ground.load();
     try std.Io.Dir.cwd().createDirPath(io, "out");
+    try writeModel(allocator, io);
 
-    var tris: [80]gale.solid.Tri = undefined;
-    const ntri = gale.solid.mesh(&tris);
-    var stl_buf: [8192]u8 = undefined;
-    const stl_n = gale.solid.stl(tris[0..ntri], &stl_buf);
+    const scenarios = [_]Scenario{
+        .{ .name = "civil", .tracker = gale.scenarios.civil(&terrain) },
+        .{ .name = "cross", .tracker = gale.scenarios.cross(&terrain) },
+        .{ .name = "silent", .tracker = gale.scenarios.silent(&terrain) },
+        .{ .name = "shadow", .tracker = gale.scenarios.shadow(&terrain) },
+        .{ .name = "final", .tracker = gale.scenarios.inApproach(&terrain) },
+        .{ .name = "clutter", .tracker = gale.scenarios.clutter(&terrain) },
+    };
+    try writeJournal(allocator, io, &scenarios);
+    try writeMap(allocator, io, &terrain, scenarios[3].tracker);
+    std.debug.print("wrote out/post.stl, out/post.ppm, out/map.ppm, out/journal.txt\n", .{});
+}
+
+fn writeModel(allocator: std.mem.Allocator, io: std.Io) !void {
+    var triangles: [80]gale.model.Triangle = undefined;
+    const count = gale.model.buildMesh(&triangles);
+    const mesh = triangles[0..count];
+    var stl_buffer: [8192]u8 = undefined;
+    const stl_size = gale.model.encodeStl(mesh, &stl_buffer);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = "out/post.stl",
-        .data = stl_buf[0..stl_n],
+        .data = stl_buffer[0..stl_size],
     });
 
-    const w: usize = 640;
-    const h: usize = 480;
-    const rgb = try arena.alloc(u8, w * h * 3);
-    const depth = try arena.alloc(f32, w * h);
-    gale.solid.draw(tris[0..ntri], rgb, depth, w, h);
-    const ppm_buf = try arena.alloc(u8, w * h * 3 + 32);
-    const ppm_n = gale.solid.ppm(rgb, w, h, ppm_buf);
-    try std.Io.Dir.cwd().writeFile(io, .{
-        .sub_path = "out/post.ppm",
-        .data = ppm_buf[0..ppm_n],
-    });
+    const width = 640;
+    const height = 480;
+    const pixels = try allocator.alloc(u8, width * height * 3);
+    const depth = try allocator.alloc(f32, width * height);
+    gale.model.render(mesh, pixels, depth, width, height);
+    try writePpm(allocator, io, "out/post.ppm", pixels, width, height);
+}
 
-    const passes = [_]struct { name: []const u8, book: gale.track.Book }{
-        .{ .name = "civil", .book = gale.run.civil(&g) },
-        .{ .name = "cross", .book = gale.run.cross(&g) },
-        .{ .name = "silent", .book = gale.run.silent(&g) },
-        .{ .name = "shadow", .book = gale.run.shadow(&g) },
-        .{ .name = "final", .book = gale.run.onFinal(&g) },
-        .{ .name = "clutter", .book = gale.run.clutter(&g) },
-    };
-
-    var text = try arena.alloc(u8, 20000);
-    var used: usize = 0;
-    const head = "Gale simulation. Receivers: Poti and Akhaltsikhe. Assumed illuminator: Mtatsminda.\n";
-    @memcpy(text[0..head.len], head);
-    used = head.len;
-
-    for (passes) |pass| {
-        const title = std.fmt.bufPrint(text[used..], "\n{s}\n", .{pass.name}) catch break;
+fn writeJournal(allocator: std.mem.Allocator, io: std.Io, scenarios: []const Scenario) !void {
+    const text = try allocator.alloc(u8, 20000);
+    const header = "Gale simulation. Receivers: Poti and Akhaltsikhe. Assumed illuminator: Mtatsminda.\n";
+    @memcpy(text[0..header.len], header);
+    var used = header.len;
+    for (scenarios) |scenario| {
+        const title = std.fmt.bufPrint(text[used..], "\n{s}\n", .{scenario.name}) catch break;
         used += title.len;
-        const body = gale.run.format(pass.book, text[used..]);
-        used += body.len;
+        used += gale.scenarios.formatJournal(scenario.tracker, text[used..]).len;
     }
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = "out/journal.txt",
         .data = text[0..used],
     });
-
-    try writeMap(arena, io, &g, passes[3].book);
-    std.debug.print("wrote out/post.stl, out/post.ppm, out/map.ppm, out/journal.txt\n", .{});
 }
 
-fn writeMap(arena: std.mem.Allocator, io: std.Io, g: *const gale.ground.Ground, book: gale.track.Book) !void {
-    const w: usize = 640;
-    const h: usize = 400;
-    const rgb = try arena.alloc(u8, w * h * 3);
-    const xmin: f64 = -20000;
-    const xmax: f64 = 160000;
-    const ymin: f64 = -90000;
-    const ymax: f64 = 30000;
-    var y: usize = 0;
-    while (y < h) : (y += 1) {
-        var x: usize = 0;
-        while (x < w) : (x += 1) {
-            const wx = xmin + (@as(f64, @floatFromInt(x)) + 0.5) / @as(f64, @floatFromInt(w)) * (xmax - xmin);
-            const wy = ymax - (@as(f64, @floatFromInt(y)) + 0.5) / @as(f64, @floatFromInt(h)) * (ymax - ymin);
-            const elev = g.height(wx, wy);
-            const t = std.math.clamp(elev / 2400.0, 0, 1);
-            const shade: u8 = @intFromFloat(28 + t * 150);
-            const o = (y * w + x) * 3;
-            if (wx < 0) {
-                rgb[o] = 18;
-                rgb[o + 1] = 48;
-                rgb[o + 2] = 62;
-            } else {
-                rgb[o] = shade;
-                rgb[o + 1] = shade + 8;
-                rgb[o + 2] = shade - 6;
+const MapImage = struct {
+    pixels: []u8,
+    width: usize,
+    height: usize,
+    min_x: f64 = -20000,
+    max_x: f64 = 160000,
+    min_y: f64 = -90000,
+    max_y: f64 = 30000,
+
+    fn markPlace(self: MapImage, name: []const u8, color: [3]u8) void {
+        const site = gale.geo.findPlace(name);
+        const position = gale.geo.toLocal(site.lat, site.lon);
+        self.mark(position.x, position.y, color);
+    }
+
+    fn mark(self: MapImage, x: f64, y: f64, color: [3]u8) void {
+        const center_x: i32 = @intFromFloat((x - self.min_x) / (self.max_x - self.min_x) * @as(f64, @floatFromInt(self.width)));
+        const center_y: i32 = @intFromFloat((self.max_y - y) / (self.max_y - self.min_y) * @as(f64, @floatFromInt(self.height)));
+        var dy: i32 = -3;
+        while (dy <= 3) : (dy += 1) {
+            var dx: i32 = -3;
+            while (dx <= 3) : (dx += 1) {
+                const pixel_x = center_x + dx;
+                const pixel_y = center_y + dy;
+                if (pixel_x < 0 or pixel_y < 0 or pixel_x >= @as(i32, @intCast(self.width)) or pixel_y >= @as(i32, @intCast(self.height))) continue;
+                const offset = (@as(usize, @intCast(pixel_y)) * self.width + @as(usize, @intCast(pixel_x))) * 3;
+                @memcpy(self.pixels[offset..][0..3], &color);
             }
         }
     }
-    stamp(rgb, w, h, xmin, xmax, ymin, ymax, gale.geo.place("Poti"), 214, 164, 72);
-    stamp(rgb, w, h, xmin, xmax, ymin, ymax, gale.geo.place("Akhaltsikhe"), 214, 164, 72);
-    stamp(rgb, w, h, xmin, xmax, ymin, ymax, gale.geo.place("Zekari"), 230, 230, 220);
-    for (book.tracks) |tr| {
-        if (!tr.live) continue;
-        dot(rgb, w, h, xmin, xmax, ymin, ymax, tr.x, tr.y, 186, 220, 230);
-    }
-    const ppm_buf = try arena.alloc(u8, w * h * 3 + 32);
-    const n = gale.solid.ppm(rgb, w, h, ppm_buf);
-    try std.Io.Dir.cwd().writeFile(io, .{
-        .sub_path = "out/map.ppm",
-        .data = ppm_buf[0..n],
-    });
-}
+};
 
-fn stamp(
-    rgb: []u8,
-    w: usize,
-    h: usize,
-    xmin: f64,
-    xmax: f64,
-    ymin: f64,
-    ymax: f64,
-    p: gale.geo.Place,
-    r: u8,
-    gv: u8,
-    b: u8,
-) void {
-    const m = gale.geo.xy(p.lat, p.lon);
-    dot(rgb, w, h, xmin, xmax, ymin, ymax, m.x, m.y, r, gv, b);
-}
-
-fn dot(
-    rgb: []u8,
-    w: usize,
-    h: usize,
-    xmin: f64,
-    xmax: f64,
-    ymin: f64,
-    ymax: f64,
-    x: f64,
-    y: f64,
-    cr: u8,
-    cg: u8,
-    cb: u8,
-) void {
-    const px: i32 = @intFromFloat((x - xmin) / (xmax - xmin) * @as(f64, @floatFromInt(w)));
-    const py: i32 = @intFromFloat((ymax - y) / (ymax - ymin) * @as(f64, @floatFromInt(h)));
-    var dy: i32 = -3;
-    while (dy <= 3) : (dy += 1) {
-        var dx: i32 = -3;
-        while (dx <= 3) : (dx += 1) {
-            const sx = px + dx;
-            const sy = py + dy;
-            if (sx < 0 or sy < 0 or sx >= @as(i32, @intCast(w)) or sy >= @as(i32, @intCast(h))) continue;
-            const o = (@as(usize, @intCast(sy)) * w + @as(usize, @intCast(sx))) * 3;
-            rgb[o] = cr;
-            rgb[o + 1] = cg;
-            rgb[o + 2] = cb;
+fn writeMap(allocator: std.mem.Allocator, io: std.Io, terrain: *const gale.ground.Ground, tracker: gale.tracking.Tracker) !void {
+    const width = 640;
+    const height = 400;
+    const image = MapImage{
+        .pixels = try allocator.alloc(u8, width * height * 3),
+        .width = width,
+        .height = height,
+    };
+    for (0..height) |y| {
+        for (0..width) |x| {
+            const world_x = image.min_x + (@as(f64, @floatFromInt(x)) + 0.5) / @as(f64, @floatFromInt(width)) * (image.max_x - image.min_x);
+            const world_y = image.max_y - (@as(f64, @floatFromInt(y)) + 0.5) / @as(f64, @floatFromInt(height)) * (image.max_y - image.min_y);
+            const elevation = terrain.height(world_x, world_y);
+            const fraction = std.math.clamp(elevation / 2400.0, 0, 1);
+            const shade: u8 = @intFromFloat(28 + fraction * 150);
+            const offset = (y * width + x) * 3;
+            // The blue strip is a display mask west of the map origin, not a coastline calculation.
+            const color: [3]u8 = if (world_x < 0) .{ 18, 48, 62 } else .{ shade, shade + 8, shade - 6 };
+            @memcpy(image.pixels[offset..][0..3], &color);
         }
     }
+    image.markPlace("Poti", .{ 214, 164, 72 });
+    image.markPlace("Akhaltsikhe", .{ 214, 164, 72 });
+    image.markPlace("Zekari", .{ 230, 230, 220 });
+    for (tracker.tracks) |tracked| {
+        if (tracked.active) image.mark(tracked.x, tracked.y, .{ 186, 220, 230 });
+    }
+    try writePpm(allocator, io, "out/map.ppm", image.pixels, width, height);
+}
+
+fn writePpm(allocator: std.mem.Allocator, io: std.Io, path: []const u8, pixels: []const u8, width: usize, height: usize) !void {
+    const buffer = try allocator.alloc(u8, pixels.len + 32);
+    const size = gale.model.encodePpm(pixels, width, height, buffer);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = buffer[0..size] });
 }

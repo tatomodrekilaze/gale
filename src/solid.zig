@@ -3,7 +3,7 @@
 
 const std = @import("std");
 
-pub const Tri = struct {
+pub const Triangle = struct {
     a: [3]f32,
     b: [3]f32,
     c: [3]f32,
@@ -17,7 +17,7 @@ pub const Part = struct {
     rgb: [3]u8,
 };
 
-// Millimetres. A field mast, six metres, small enough to stand on a pad.
+// Box bounds are in millimetres. The mast sits on a 160 mm base.
 pub const parts = [_]Part{
     .{ .name = "pad", .min = .{ -700, -700, 0 }, .max = .{ 700, 700, 160 }, .rgb = .{ 90, 92, 88 } },
     .{ .name = "mast", .min = .{ -70, -70, 160 }, .max = .{ 70, 70, 6400 }, .rgb = .{ 48, 52, 50 } },
@@ -27,22 +27,22 @@ pub const parts = [_]Part{
     .{ .name = "camera", .min = .{ -90, -90, 6400 }, .max = .{ 90, 90, 6620 }, .rgb = .{ 20, 24, 28 } },
 };
 
-pub fn mesh(buf: []Tri) usize {
-    var n: usize = 0;
+pub fn buildMesh(triangles: []Triangle) usize {
+    var count: usize = 0;
     for (parts) |part| {
-        n += box(buf[n..], part.min, part.max, part.rgb);
+        count += box(triangles[count..], part.min, part.max, part.rgb);
     }
-    return n;
+    return count;
 }
 
-fn box(buf: []Tri, min: [3]f32, max: [3]f32, rgb: [3]u8) usize {
+fn box(triangles: []Triangle, min: [3]f32, max: [3]f32, rgb: [3]u8) usize {
     const x0 = min[0];
     const y0 = min[1];
     const z0 = min[2];
     const x1 = max[0];
     const y1 = max[1];
     const z1 = max[2];
-    const p = [_][3]f32{
+    const vertices = [_][3]f32{
         .{ x0, y0, z0 }, .{ x1, y0, z0 }, .{ x1, y1, z0 }, .{ x0, y1, z0 },
         .{ x0, y0, z1 }, .{ x1, y0, z1 }, .{ x1, y1, z1 }, .{ x0, y1, z1 },
     };
@@ -54,40 +54,40 @@ fn box(buf: []Tri, min: [3]f32, max: [3]f32, rgb: [3]u8) usize {
         .{ 2, 6, 7, 3 },
         .{ 3, 7, 4, 0 },
     };
-    var n: usize = 0;
-    for (faces) |f| {
-        buf[n] = .{ .a = p[f[0]], .b = p[f[1]], .c = p[f[2]], .rgb = rgb };
-        buf[n + 1] = .{ .a = p[f[0]], .b = p[f[2]], .c = p[f[3]], .rgb = rgb };
-        n += 2;
+    var count: usize = 0;
+    for (faces) |face| {
+        triangles[count] = .{ .a = vertices[face[0]], .b = vertices[face[1]], .c = vertices[face[2]], .rgb = rgb };
+        triangles[count + 1] = .{ .a = vertices[face[0]], .b = vertices[face[2]], .c = vertices[face[3]], .rgb = rgb };
+        count += 2;
     }
-    return n;
+    return count;
 }
 
-pub fn stl(tris: []const Tri, out: []u8) usize {
+pub fn encodeStl(triangles: []const Triangle, out: []u8) usize {
     @memset(out[0..80], 0);
     const note = "gale listening post. simulated. no transmitter.";
     @memcpy(out[0..note.len], note);
-    std.mem.writeInt(u32, out[80..84], @intCast(tris.len), .little);
-    var off: usize = 84;
-    for (tris) |t| {
-        const nrm = normal(t.a, t.b, t.c);
-        putF32(out[off..], nrm[0]);
-        putF32(out[off + 4 ..], nrm[1]);
-        putF32(out[off + 8 ..], nrm[2]);
-        off += 12;
-        inline for (.{ t.a, t.b, t.c }) |p| {
-            putF32(out[off..], p[0]);
-            putF32(out[off + 4 ..], p[1]);
-            putF32(out[off + 8 ..], p[2]);
-            off += 12;
+    std.mem.writeInt(u32, out[80..84], @intCast(triangles.len), .little);
+    var offset: usize = 84;
+    for (triangles) |triangle| {
+        const face_normal = normal(triangle.a, triangle.b, triangle.c);
+        writeF32(out[offset..], face_normal[0]);
+        writeF32(out[offset + 4 ..], face_normal[1]);
+        writeF32(out[offset + 8 ..], face_normal[2]);
+        offset += 12;
+        inline for (.{ triangle.a, triangle.b, triangle.c }) |vertex| {
+            writeF32(out[offset..], vertex[0]);
+            writeF32(out[offset + 4 ..], vertex[1]);
+            writeF32(out[offset + 8 ..], vertex[2]);
+            offset += 12;
         }
-        std.mem.writeInt(u16, out[off..][0..2], 0, .little);
-        off += 2;
+        std.mem.writeInt(u16, out[offset..][0..2], 0, .little);
+        offset += 2;
     }
-    return off;
+    return offset;
 }
 
-fn putF32(dst: []u8, v: f32) void {
+fn writeF32(dst: []u8, v: f32) void {
     std.mem.writeInt(u32, dst[0..4], @bitCast(v), .little);
 }
 
@@ -109,70 +109,69 @@ fn normal(a: [3]f32, b: [3]f32, c: [3]f32) [3]f32 {
     return .{ nx, ny, nz };
 }
 
-pub fn draw(tris: []const Tri, rgb: []u8, depth: []f32, w: usize, h: usize) void {
+pub fn render(triangles: []const Triangle, rgb: []u8, depth: []f32, width: usize, height: usize) void {
     @memset(depth, -1e9);
-    @memset(rgb, 0);
     var i: usize = 0;
-    while (i < w * h * 3) : (i += 3) {
+    while (i < width * height * 3) : (i += 3) {
         rgb[i] = 14;
         rgb[i + 1] = 18;
         rgb[i + 2] = 16;
     }
-    for (tris) |t| {
-        const pa = project(t.a);
-        const pb = project(t.b);
-        const pc = project(t.c);
-        const z = (t.a[0] + t.b[0] + t.c[0] + t.a[1] + t.b[1] + t.c[1]) / 6;
-        fillTri(rgb, depth, w, h, pa, pb, pc, z, t.rgb);
+    for (triangles) |triangle| {
+        const pa = project(triangle.a);
+        const pb = project(triangle.b);
+        const pc = project(triangle.c);
+        const z = (triangle.a[0] + triangle.b[0] + triangle.c[0] + triangle.a[1] + triangle.b[1] + triangle.c[1]) / 6;
+        fillTriangle(rgb, depth, width, height, pa, pb, pc, z, triangle.rgb);
     }
 }
 
-fn project(p: [3]f32) [2]i32 {
-    const s: f32 = 0.058;
-    const x = (p[0] - p[1]) * s;
-    const y = (p[2] + (p[0] + p[1]) * 0.12) * s;
+fn project(point: [3]f32) [2]i32 {
+    const scale: f32 = 0.058;
+    const x = (point[0] - point[1]) * scale;
+    const y = (point[2] + (point[0] + point[1]) * 0.12) * scale;
     return .{ 300 + @as(i32, @intFromFloat(x)), 450 - @as(i32, @intFromFloat(y)) };
 }
 
-fn fillTri(
+fn fillTriangle(
     rgb: []u8,
     depth: []f32,
-    w: usize,
-    h: usize,
+    width: usize,
+    height: usize,
     a: [2]i32,
     b: [2]i32,
     c: [2]i32,
     z: f32,
-    col: [3]u8,
+    color: [3]u8,
 ) void {
-    var minx = @min(a[0], @min(b[0], c[0]));
-    var maxx = @max(a[0], @max(b[0], c[0]));
-    var miny = @min(a[1], @min(b[1], c[1]));
-    var maxy = @max(a[1], @max(b[1], c[1]));
-    if (maxx < 0 or maxy < 0) return;
-    if (minx < 0) minx = 0;
-    if (miny < 0) miny = 0;
-    if (maxx >= @as(i32, @intCast(w))) maxx = @intCast(w - 1);
-    if (maxy >= @as(i32, @intCast(h))) maxy = @intCast(h - 1);
+    var min_x = @min(a[0], @min(b[0], c[0]));
+    var max_x = @max(a[0], @max(b[0], c[0]));
+    var min_y = @min(a[1], @min(b[1], c[1]));
+    var max_y = @max(a[1], @max(b[1], c[1]));
+    if (max_x < 0 or max_y < 0) return;
+    if (min_x < 0) min_x = 0;
+    if (min_y < 0) min_y = 0;
+    if (max_x >= @as(i32, @intCast(width))) max_x = @intCast(width - 1);
+    if (max_y >= @as(i32, @intCast(height))) max_y = @intCast(height - 1);
     const area = edge(a, b, c);
     if (area == 0) return;
-    var y = miny;
-    while (y <= maxy) : (y += 1) {
-        var x = minx;
-        while (x <= maxx) : (x += 1) {
-            const p = [2]i32{ x, y };
-            const w0 = edge(b, c, p);
-            const w1 = edge(c, a, p);
-            const w2 = edge(a, b, p);
-            const inside = if (area > 0) (w0 >= 0 and w1 >= 0 and w2 >= 0) else (w0 <= 0 and w1 <= 0 and w2 <= 0);
+    var y = min_y;
+    while (y <= max_y) : (y += 1) {
+        var x = min_x;
+        while (x <= max_x) : (x += 1) {
+            const sample = [2]i32{ x, y };
+            const weight_a = edge(b, c, sample);
+            const weight_b = edge(c, a, sample);
+            const weight_c = edge(a, b, sample);
+            const inside = if (area > 0) (weight_a >= 0 and weight_b >= 0 and weight_c >= 0) else (weight_a <= 0 and weight_b <= 0 and weight_c <= 0);
             if (!inside) continue;
-            const idx = @as(usize, @intCast(y)) * w + @as(usize, @intCast(x));
-            if (z < depth[idx]) continue;
-            depth[idx] = z;
-            const o = idx * 3;
-            rgb[o] = col[0];
-            rgb[o + 1] = col[1];
-            rgb[o + 2] = col[2];
+            const pixel = @as(usize, @intCast(y)) * width + @as(usize, @intCast(x));
+            if (z < depth[pixel]) continue;
+            depth[pixel] = z;
+            const offset = pixel * 3;
+            rgb[offset] = color[0];
+            rgb[offset + 1] = color[1];
+            rgb[offset + 2] = color[2];
         }
     }
 }
@@ -181,8 +180,8 @@ fn edge(a: [2]i32, b: [2]i32, c: [2]i32) i32 {
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 }
 
-pub fn ppm(rgb: []const u8, w: usize, h: usize, out: []u8) usize {
-    const head = std.fmt.bufPrint(out, "P6\n{d} {d}\n255\n", .{ w, h }) catch unreachable;
+pub fn encodePpm(rgb: []const u8, width: usize, height: usize, out: []u8) usize {
+    const head = std.fmt.bufPrint(out, "P6\n{d} {d}\n255\n", .{ width, height }) catch unreachable;
     @memcpy(out[head.len .. head.len + rgb.len], rgb);
     return head.len + rgb.len;
 }
